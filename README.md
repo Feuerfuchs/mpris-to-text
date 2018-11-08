@@ -1,6 +1,6 @@
 # MPRIS To Text
 
-A python script that fetches data from MPRIS-compliant media players and saves it into a text file.
+A Python script that fetches media data from MPRIS-compliant media players and saves it into a text file.
 
 ## Required packages
 
