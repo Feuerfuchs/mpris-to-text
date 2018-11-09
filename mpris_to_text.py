@@ -9,15 +9,14 @@ import signal
 
 from blessed import Terminal
 
-import dbussy as dbus
 import ravel
 
 
-loop       = asyncio.get_event_loop()
-name_regex = re.compile("^org\.mpris\.MediaPlayer2\.")
-
+loop         = asyncio.get_event_loop()
+name_regex   = re.compile("^org\.mpris\.MediaPlayer2\.")
 bus          = None
 term         = Terminal()
+
 refresh_cond = threading.Condition()
 refresh_flag = True
 exit_flag    = False
@@ -253,12 +252,6 @@ def read_args():
         default = "/tmp/mpris_info.txt",
         help    = "Full path to file (default: \"/tmp/mpris_info.txt\")"
     )
-    parser.add_argument("--format-order",
-        type    = str,
-        dest    = "format",
-        default = "{artist}{title}{album}            ",
-        help    = "Format string (default: \"{artist}{title}{album}            \")"
-    )
     parser.add_argument("--format-artist",
         type    = str,
         dest    = "format_artist",
@@ -276,6 +269,12 @@ def read_args():
         dest    = "format_album",
         default = "  from  \"{}\"",
         help    = "Format string for the album part (default: \"  from  \"{}\"\")"
+    )
+    parser.add_argument("--format",
+        type    = str,
+        dest    = "format",
+        default = "{artist}{title}{album}            ",
+        help    = "Full format string (default: \"{artist}{title}{album}            \")"
     )
 
     args               = parser.parse_args()

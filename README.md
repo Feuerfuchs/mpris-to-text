@@ -6,5 +6,14 @@ A Python script that fetches media data from MPRIS-compliant media players and s
 
 ## Required packages
 
-- [blessed](https://github.com/jquast/blessed)
-- [dbussy](https://github.com/ldo/dbussy)
+- [blessed](https://github.com/jquast/blessed): Terminal UI
+- [dbussy](https://github.com/ldo/dbussy): DBus client
+
+## Parameters
+
+- `-h`: Display help
+- `--file`: Full path to the file the data is written into
+- `--format-artist`: Format string for the artist part
+- `--format-title`: Format string for the title part
+- `--format-album`: Format string for the album part
+- `--format`: Format string that puts all parts together
