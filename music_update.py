@@ -4,6 +4,8 @@ import sys
 import asyncio
 import re
 import threading
+import argparse
+import signal
 
 from blessed import Terminal
 
@@ -26,25 +28,31 @@ player_id_to_index = {}
 active_player      = ""
 current_output     = ""
 
+filename           = ""
+meta_format        = ""
+meta_format_artist = ""
+meta_format_title  = ""
+meta_format_album  = ""
+
 
 def track_string(metadata):
     artist = metadata["xesam:artist"][1][0] if "xesam:artist" in metadata else ""
     title  = metadata["xesam:title"][1]     if "xesam:title"  in metadata else ""
     album  = metadata["xesam:album"][1]     if "xesam:album"  in metadata else ""
 
-    track = ""
-    if artist != "": track = artist + "    "
-    track = track + "\"" + title + "\""
-    if album != "": track = track + "  from  \"" + album + "\""
-
-    return track + "            "
+    return meta_format.format(
+        artist = meta_format_artist.format(artist) if artist != "" else "",
+        title  = meta_format_title.format(title)   if title  != "" else "",
+        album  = meta_format_album.format(album)   if title  != "" else ""
+    )
 
 
 def write_track(track):
+    global filename
     global current_output
     
     current_output = track
-    f = open("/mnt/Data/stream_info.txt", "w")
+    f = open(filename, "w")
     f.write(track)
     f.close()
 
@@ -145,6 +153,7 @@ def draw_menu():
     global refresh_flag
     global exit_flag
     global current_output
+    global filename
 
     while not exit_flag:
         with refresh_cond:
@@ -154,23 +163,34 @@ def draw_menu():
             refresh_flag = False
 
             with term.fullscreen():
-                print(term.move(0, 0) + term.bold("MPRIS to Text") + "\n")
+                print(term.move(0, 0) + term.bold_bright_white_on_bright_black(("{0:<{width}}").format("MPRIS To Text", width=term.width)) + "\n")
+                print(term.move_x(2) + term.bold("Player: ") + term.move_up())
                 
                 for i in range(len(players)):
                     player = players[i]
                     output = "%d: %s" % (i, player[1])
 
                     if players[player_id_to_index[active_player]][0] == player[0]:
-                        print(term.move_x(8) + term.standout_bold(output))
+                        print(term.move_x(10) + term.standout(output))
                     else:
-                        print(term.move_x(8) + output)
+                        print(term.move_x(10) + output)
 
-                print(term.move_x(0) + "\n" + term.bold("Current output:") + " " + current_output)
+                print(term.move_x(2) + term.bold("File:   ") + filename)
+                print(term.move_x(2) + term.bold("Output: ") + "\n".join(term.wrap(current_output, width=term.width - 10, subsequent_indent=" " * 10)))
 
-                print(term.move_x(0) + "\n\nEnter number to select player or q to exit." + term.move_up())
+                print(term.move_x(0) + "\nEnter number to select player or q to exit." + term.move_up())
 
     with term.fullscreen():
         print(term.move(0, 0) + "Exiting...")
+
+
+def on_resize(*args):
+    global refresh_cond
+    global refresh_flag
+
+    with refresh_cond:
+        refresh_flag = True
+        refresh_cond.notify()
 
 
 def init_dbus():
@@ -218,6 +238,58 @@ def init_blessed():
 
         exit_task.set_result(True)
 
+
+def read_args():
+    global filename
+    global meta_format
+    global meta_format_artist
+    global meta_format_title
+    global meta_format_album
+
+    parser = argparse.ArgumentParser(description="Write metadata from MPRIS-compliant media players into a text file.")
+    parser.add_argument("--file",
+        type    = str,
+        dest    = "filename",
+        default = "/tmp/mpris_info.txt",
+        help    = "Full path to file (default: \"/tmp/mpris_info.txt\")"
+    )
+    parser.add_argument("--format-order",
+        type    = str,
+        dest    = "format",
+        default = "{artist}{title}{album}            ",
+        help    = "Format string (default: \"{artist}{title}{album}            \")"
+    )
+    parser.add_argument("--format-artist",
+        type    = str,
+        dest    = "format_artist",
+        default = "{}    ",
+        help    = "Format string for the artist part (default: \"{}    \")"
+    )
+    parser.add_argument("--format-title",
+        type    = str,
+        dest    = "format_title",
+        default = "\"{}\"",
+        help    = "Format string for the title part (default: \"\"{}\"\")"
+    )
+    parser.add_argument("--format-album",
+        type    = str,
+        dest    = "format_album",
+        default = "  from  \"{}\"",
+        help    = "Format string for the album part (default: \"  from  \"{}\"\")"
+    )
+
+    args               = parser.parse_args()
+    filename           = args.filename
+    meta_format        = args.format
+    meta_format_artist = args.format_artist
+    meta_format_title  = args.format_title
+    meta_format_album  = args.format_album
+
+
+
+read_args()
+
+signal.signal(signal.SIGWINCH, on_resize)
 
 init_dbus()
 
