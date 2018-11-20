@@ -1,31 +1,34 @@
 #!/usr/bin/python
 
 import sys
-import asyncio
 import re
 import threading
 import argparse
 import signal
 
+import dbus
+import dbus.mainloop.glib
+from gi.repository import GLib
+
 from blessed import Terminal
 
-import ravel
+
+dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
 
 
-loop         = asyncio.get_event_loop()
 name_regex   = re.compile("^org\.mpris\.MediaPlayer2\.")
-bus          = None
+bus          = dbus.SessionBus()
 term         = Terminal()
 
 refresh_cond = threading.Condition()
 refresh_flag = True
 exit_flag    = False
-exit_task    = asyncio.Future()
 
-players            = []
-player_id_to_index = {}
-active_player      = ""
-current_output     = ""
+players                              = []
+player_id_to_index                   = {}
+active_player                        = ""
+current_output                       = ""
+playing_song_changed_signal_receiver = None
 
 filename           = ""
 meta_format        = ""
@@ -35,14 +38,14 @@ meta_format_album  = ""
 
 
 def track_string(metadata):
-    artist = metadata["xesam:artist"][1][0] if "xesam:artist" in metadata else ""
-    title  = metadata["xesam:title"][1]     if "xesam:title"  in metadata else ""
-    album  = metadata["xesam:album"][1]     if "xesam:album"  in metadata else ""
+    artist = metadata["xesam:artist"][0] if "xesam:artist" in metadata else ""
+    title  = metadata["xesam:title"]     if "xesam:title"  in metadata else ""
+    album  = metadata["xesam:album"]     if "xesam:album"  in metadata else ""
 
     return meta_format.format(
         artist = meta_format_artist.format(artist) if artist != "" else "",
         title  = meta_format_title.format(title)   if title  != "" else "",
-        album  = meta_format_album.format(album)   if title  != "" else ""
+        album  = meta_format_album.format(album)   if album  != "" else ""
     )
 
 
@@ -56,25 +59,21 @@ def write_track(track):
     f.close()
 
 
-@ravel.signal(name = "PropertiesChanged", in_signature = "sa{sv}as", args_keyword = "args")
-def playing_song_changed(args):
+def playing_song_changed(player, changed_properties, invalidated_properties):
     global refresh_cond
     global refresh_flag
 
-    [ player, changed_properties, invalidated_properties ] = args
     if "Metadata" in changed_properties:
-        write_track(track_string(changed_properties["Metadata"][1]))
+        write_track(track_string(changed_properties["Metadata"]))
         with refresh_cond:
             refresh_flag = True
             refresh_cond.notify()
 
 
-@ravel.signal(name = "NameOwnerChanged", in_signature = "sss", args_keyword = "args")
-def dbus_name_owner_changed(args):
+def dbus_name_owner_changed(name, old_owner, new_owner):
     global refresh_cond
     global refresh_flag
 
-    [ name, old_owner, new_owner ] = args
     if name_regex.match(name):
         get_players()
         with refresh_cond:
@@ -84,7 +83,10 @@ def dbus_name_owner_changed(args):
 
 def set_active_player(player_id):
     global bus
+    global players
+    global player_id_to_index
     global active_player
+    global playing_song_changed_signal_receiver
 
     if player_id in player_id_to_index:
         active_player = player_id
@@ -93,26 +95,22 @@ def set_active_player(player_id):
     else:
         active_player = ""
 
-    for (name, player_id) in players:
-        bus.unlisten_propchanged(
-            path      = "/org/mpris/MediaPlayer2",
-            interface = name,
-            func      = playing_song_changed,
-            fallback  = True
-        )
+    if playing_song_changed_signal_receiver is not None:
+        playing_song_changed_signal_receiver.remove()
 
     if active_player != "":
-        bus.listen_propchanged(
-            path      = "/org/mpris/MediaPlayer2",
-            interface = active_player,
-            func      = playing_song_changed,
-            fallback  = True
+        playing_song_changed_signal_receiver = bus.add_signal_receiver(
+            handler_function = playing_song_changed,
+            bus_name         = active_player,
+            dbus_interface   = "org.freedesktop.DBus.Properties",
+            signal_name      = "PropertiesChanged",
+            path             = "/org/mpris/MediaPlayer2"
         )
 
-        player_path  = bus[active_player]["/org/mpris/MediaPlayer2"]
-        player_props = player_path.get_interface("org.freedesktop.DBus.Properties")
+        player_path  = bus.get_object(active_player, "/org/mpris/MediaPlayer2")
+        player_props = dbus.Interface(player_path, "org.freedesktop.DBus.Properties")
 
-        write_track(track_string(player_props.Get("org.mpris.MediaPlayer2.Player", "Metadata")[0][1]))
+        write_track(track_string(player_props.Get("org.mpris.MediaPlayer2.Player", "Metadata")))
     else:
         write_track("")
 
@@ -120,23 +118,25 @@ def set_active_player(player_id):
 def get_players():
     global players
     global player_id_to_index
+    global active_player
 
     players            = []
     player_id_to_index = {}
-    bus_proxy          = bus["org.freedesktop.DBus"]["/org/freedesktop/DBus"].get_interface("org.freedesktop.DBus")
+    bus_path           = bus.get_object("org.freedesktop.DBus", "/org/freedesktop/DBus")
+    bus_proxy          = dbus.Interface(bus_path, "org.freedesktop.DBus")
     names              = bus_proxy.ListNames()
 
-    for name in names[0]:
+    for name in names:
         if name_regex.match(name):
             split_name     = name.split(".")
             id_start_index = len(split_name[0]) + len(split_name[1]) + len(split_name[2]) + 3
 
-            player_path  = bus[name]["/org/mpris/MediaPlayer2"]
-            player_proxy = player_path.get_interface("org.mpris.MediaPlayer2")
+            player_path  = bus.get_object(name, "/org/mpris/MediaPlayer2")
+            player_props = dbus.Interface(player_path, "org.freedesktop.DBus.Properties")
             player_id    = name[id_start_index:]
             try:
-                player_id = player_proxy.Identity
-            except AttributeError:
+                player_id = player_props.Get("org.mpris.MediaPlayer2.Player", "Identity")
+            except dbus.exceptions.DBusException:
                 pass
 
             players.append((name, player_id))
@@ -194,17 +194,11 @@ def on_resize(*args):
 
 def init_dbus():
     global bus
-    global loop
 
-    bus = ravel.session_bus()
-    bus.attach_asyncio(loop)
-    bus.listen_signal(
-        path      = "/org/freedesktop/DBus",
-        interface = "org.freedesktop.DBus",
-        name      = "NameOwnerChanged",
-        func      = dbus_name_owner_changed,
-        fallback  = True
-    )
+    bus_path  = bus.get_object("org.freedesktop.DBus", "/org/freedesktop/DBus")
+    bus_proxy = dbus.Interface(bus_path, "org.freedesktop.DBus")
+
+    bus_proxy.connect_to_signal("NameOwnerChanged", dbus_name_owner_changed)
 
     get_players()
 
@@ -215,6 +209,7 @@ def init_blessed():
     global refresh_cond
     global refresh_flag
     global exit_flag
+    global loop
 
     with term.cbreak():
         val = None
@@ -235,7 +230,7 @@ def init_blessed():
             exit_flag = True
             refresh_cond.notify()
 
-        exit_task.set_result(True)
+        loop.quit()
 
 
 def read_args():
@@ -298,4 +293,5 @@ blessed_thread.start()
 menu_thread = threading.Thread(target=draw_menu)
 menu_thread.start()
 
-loop.run_until_complete(exit_task)
+loop = GLib.MainLoop()
+loop.run()

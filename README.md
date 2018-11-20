@@ -7,7 +7,6 @@ A Python script that fetches media data from MPRIS-compliant media players and s
 ## Required packages
 
 - [blessed](https://github.com/jquast/blessed): Terminal UI
-- [dbussy](https://github.com/ldo/dbussy): DBus client
 
 ## Parameters
 
